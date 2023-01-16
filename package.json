@@ -1,0 +1,13 @@
+{
+  "name": "tree-sitter-whimsy",
+  "version": "0.0.1",
+  "description": "Tree-sitter grammar for Whimsy",
+  "main": "grammar.js",
+  "scripts": {
+  },
+  "author": "defiant00",
+  "license": "MIT",
+  "devDependencies": {
+    "tree-sitter-cli": "^0.20.7"
+  }
+}
