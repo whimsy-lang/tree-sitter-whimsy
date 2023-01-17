@@ -1,5 +1,26 @@
+const PREC = {
+    NONE: 0,
+    IF: 1,
+    OR: 2,
+    AND: 3,
+    EQUALITY: 4,
+    COMPARISON: 5,
+    RANGE: 6,
+    TERM: 7,
+    FACTOR: 8,
+    CUSTOM: 9,
+    UNARY: 10,
+    CALL: 11,
+    PRIMARY: 12,
+};
+
 module.exports = grammar({
     name: 'Whimsy',
+
+    extras: $ => [
+        /\s+/,
+        $.comment,
+    ],
 
     rules: {
         source_file: $ => repeat($._stmt),
@@ -24,11 +45,18 @@ module.exports = grammar({
         break_stmt: $ => seq('break', $._expr),
         continue_stmt: $ => seq('continue', $._expr),
         expr_stmt: $ => $._expr,
-        for_stmt: $ => seq('for', $.ident, 'in', $._expr, repeat($._loop_stmts), '/for'),
+        for_stmt: $ => seq(
+            'for',
+            field('local', $.ident),
+            'in',
+            field('val', $._expr),
+            field('stmt', repeat($._loop_stmts)),
+            '/for'
+        ),
         if_stmt: $ => seq(
-            'if', $._expr, repeat($._stmt),
-            repeat(seq('elif', $._expr, repeat($._stmt))),
-            optional(seq('else', repeat($._stmt))),
+            'if', field('condition', $._expr), field('if_stmt', repeat($._stmt)),
+            repeat(seq('elif', field('condition', $._expr), field('elif_stmt', repeat($._stmt)))),
+            optional(seq('else', field('else_stmt', repeat($._stmt)))),
             '/if',
         ),
         loop_stmt: $ => seq('loop', repeat($._loop_stmts), '/loop'),
@@ -38,6 +66,7 @@ module.exports = grammar({
         empty_stmt: $ => ';',
 
         _expr: $ => choice(
+            $.if_expr,
             $.logic_or,
             $.logic_and,
             $.equality,
@@ -50,34 +79,51 @@ module.exports = grammar({
             $._primary,
         ),
 
-        logic_or: $ => prec.left(1, seq($._expr, 'or', $._expr)),
-        logic_and: $ => prec.left(2, seq($._expr, 'and', $._expr)),
-        equality: $ => prec.left(3, seq($._expr, choice('==', '!='), $._expr)),
-        comparison: $ => prec.left(4, seq($._expr, choice('<', '<=', '>', '>=', 'is'), $._expr)),
-        range: $ => prec.left(5, seq($._expr, choice('..', '..='), $._expr, optional(seq('by', $._expr)))),
-        term: $ => prec.left(6, seq($._expr, choice('+', '-'), $._expr)),
-        factor: $ => prec.left(7, seq($._expr, choice('*', '/', '%'), $._expr)),
-        // todo - custom, prec 8
-        unary: $ => prec(9, seq(choice('!', '-'), $._expr)),
-        call: $ => prec(10, seq($._expr,
-            repeat1(choice(
+        if_expr: $ => prec(PREC.IF, seq(
+            'if',
+            field('condition', $._expr),
+            optional(';'),
+            field('val', $._expr),
+            repeat(seq(
+                'elif',
+                field('elif_cond', $._expr),
+                optional(';'),
+                field('elif_val', $._expr))),
+            'else',
+            field('else_val', $._expr),
+        )),
+        logic_or: $ => prec.left(PREC.OR, seq($._expr, 'or', $._expr)),
+        logic_and: $ => prec.left(PREC.AND, seq($._expr, 'and', $._expr)),
+        equality: $ => prec.left(PREC.EQUALITY, seq($._expr, choice('==', '!='), $._expr)),
+        comparison: $ => prec.left(PREC.COMPARISON, seq($._expr, choice('<', '<=', '>', '>=', 'is'), $._expr)),
+        range: $ => prec.left(PREC.RANGE, seq(
+            field('start', $._expr),
+            choice('..', '..='),
+            field('end', $._expr),
+            optional(seq('by', field('step', $._expr)))
+        )),
+        term: $ => prec.left(PREC.TERM, seq($._expr, choice('+', '-'), $._expr)),
+        factor: $ => prec.left(PREC.FACTOR, seq($._expr, choice('*', '/', '%'), $._expr)),
+        // todo - custom
+        unary: $ => prec(PREC.UNARY, seq(choice('!', '-'), $._expr)),
+        call: $ => prec(PREC.CALL, seq($._expr,
+            choice(
                 seq('(', optional($.arguments), ')'),
                 seq('.', choice($.ident, $.string)),
                 seq(':', choice($.ident, $.string), '(', optional($.arguments), ')'),
                 seq('[', $._expr, ']'),
-            )),
+            ),
         )),
 
-        _primary: $ => prec(11, choice(
+        _primary: $ => prec(PREC.PRIMARY, choice(
             $.constant,
             $.number, $.string, $.ident,
-            $.paren,
-            $.if_expr,
+            $._paren,
             $.class,
             $.function,
             // | list
             // | map
-            // | set
+            $.set,
         )),
 
         constant: $ => choice('true', 'false', 'nil'),
@@ -92,20 +138,24 @@ module.exports = grammar({
             /"[^"]*"/,
             /'[^']*'/,
         ),
+        // todo - keywords shouldn't match ident
         ident: $ => /[a-zA-Z_][a-zA-Z0-9_]*/,
-        paren: $ => seq('(', $._expr, ')'),
-        if_expr: $ => prec(12, seq(
-            'if', $._expr, optional(';'), $._expr,
-            repeat(seq('elif', $._expr, optional(';'), $._expr)),
-            'else', $._expr,
-        )),
-        class: $ => seq('class', optional(seq('is', $._expr)), repeat($._stmt), '/class'),
+        _paren: $ => seq('(', $._expr, ')'),
+        class: $ => seq(
+            'class',
+            optional(seq('is', field('parent', $._expr))),
+            field('stmt', repeat($._stmt)),
+            '/class'
+        ),
         function: $ => seq('fn', '(', optional($.parameters), ')', repeat($._stmt), '/fn'),
-        //         list -> "(" ((expression ",") | (expression ("," expression)+ ","?))? ")"
-        //             map -> "[" (expression ("::" | ":=") expression ("," expression ("::" | ":=") expression)* ","?)? "]"
-        //             set -> "[" expression ("," expression)* ","? "]"
+
+        // list -> "(" ((expression ",") | (expression ("," expression)+ ","?))? ")"
+        // map -> "[" (expression ("::" | ":=") expression ("," expression ("::" | ":=") expression)* ","?)? "]"
+        set: $ => seq('[', $._expr, repeat(seq(',', $._expr)), optional(','), ']'),
 
         parameters: $ => seq($.ident, repeat(seq(',', $.ident)), optional(',')),
-        arguments: $ => prec(12, seq($._expr, repeat(seq(',', $._expr)), optional(','))),
+        arguments: $ => prec(1, seq($._expr, repeat(seq(',', $._expr)), optional(','))),
+
+        comment: $ => seq('#', /[^\r\n]*/),
     }
 });
